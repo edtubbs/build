@@ -73,7 +73,10 @@ TF_A_OUT = $(TF_A_PATH)/build/rk3588/debug
 endif
 
 TF_A_FLAGS ?= ARCH=aarch64 PLAT=rk3588 SPD=opteed DEBUG=$(TF_A_DEBUG) \
-	      LOG_LEVEL=$(TF_A_LOGLVL)
+	      LOG_LEVEL=$(TF_A_LOGLVL) \
+              BL32=$(OPTEE_OS_HEADER_V2_BIN) \
+	      BL32_EXTRA1=$(OPTEE_OS_PAGER_V2_BIN) \
+	      BL32_EXTRA2=$(OPTEE_OS_PAGEABLE_V2_BIN)
 
 .PHONY: tfa
 tfa:
