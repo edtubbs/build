@@ -1,4 +1,3 @@
-
 COMPILE_NS_USER ?= 64
 override COMPILE_NS_KERNEL := 64
 COMPILE_S_USER ?= 64
@@ -21,8 +20,8 @@ UBOOT_BIN		?= $(UBOOT_PATH)/u-boot.bin
 ROOT_IMG		?= $(ROOT)/out-br/images/rootfs.ext2
 BOOT_IMG		?= $(ROOT)/out/nanopc-t6.img
 TPL_BIN			?= $(BINARIES_PATH)/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.18.bin
-BOOT_CMD_PATCH		?= $(ROOT)/build/nanopc-t6/nanopi6.h.patch
-BOARD_DTSI_PATCH	?= $(ROOT)/build/nanopc-t6/rk3588-nanopi6-common.dtsi.patch
+BOOT_CMD		?= $(ROOT)/build/nanopc-t6/nanopi6.h
+BOARD_DTSO		?= $(ROOT)/build/nanopc-t6/rk3588-nanopi6-optee.dtso
 LINUX_DTSI		?= $(LINUX_PATH)/arch/arm64/boot/dts/rockchip/rk3588-nanopi6-common.dtsi
 UBOOT_HEADER		?= $(UBOOT_PATH)/include/configs/nanopi6.h
 
@@ -38,9 +37,9 @@ ifeq ($(LINUX_MODULES),y)
 # If modules are installed...
 # ...enable automatic device detection and driver loading
 BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV = y
-# ...and configure eth0 automatically based on ifup helpers
+# ...and configure enP2p33s0 automatically based on ifup helpers
 BR2_PACKAGE_IFUPDOWN_SCRIPTS = y
-#BR2_SYSTEM_DHCP = eth0
+BR2_SYSTEM_DHCP = enP2p33s0
 # An image with module takes more space
 BR2_TARGET_ROOTFS_EXT2_SIZE = 1536M
 # Enable SSH daemon for remote login
@@ -68,7 +67,9 @@ include toolchain.mk
 # Arm Trusted Firmware-A
 ################################################################################
 TF_A_EXPORTS ?= CROSS_COMPILE="$(CCACHE)$(AARCH64_CROSS_COMPILE)" \
-		M0_CROSS_COMPILE="$(CCACHE)$(AARCH32_CROSS_COMPILE)"
+		M0_CROSS_COMPILE="$(CCACHE)$(AARCH32_CROSS_COMPILE)" \
+		CC="$(CCACHE)$(AARCH64_CROSS_COMPILE)gcc" \
+		LD="$(CCACHE)$(AARCH64_CROSS_COMPILE)ld"
 
 TF_A_DEBUG ?= $(DEBUG)
 ifeq ($(TF_A_DEBUG),0)
@@ -104,8 +105,7 @@ UBOOT_FLAGS ?= CROSS_COMPILE=$(CROSS_COMPILE_NS_KERNEL) \
 
 $(TPL_BIN):
 	mkdir -p $(BINARIES_PATH)
-	cd $(BINARIES_PATH) && \
-		wget -O $(notdir $(TPL_BIN)) https://github.com/rockchip-linux/rkbin/raw/master/bin/rk35/$(notdir $(TPL_BIN))
+	wget -O $(TPL_BIN) https://github.com/rockchip-linux/rkbin/raw/master/bin/rk35/$(notdir $(TPL_BIN))
 
 UBOOT_EXPORTS ?= BL31=$(TF_A_OUT)/bl31/bl31.elf \
                  TEE=$(OPTEE_OS_BIN) \
@@ -128,25 +128,16 @@ u-boot-config: $(UBOOT_PATH)/.config optee-os tfa
 u-boot-proper: $(TPL_BIN) $(UBOOT_PATH)/.config u-boot-config
 	$(UBOOT_EXPORTS) $(MAKE) -C $(UBOOT_PATH) $(UBOOT_FLAGS)
 
-.PHONY: u-boot-apply-patch
-u-boot-apply-patch:
-	@if [ -f "$(BOOT_CMD_PATCH)" ]; then \
-		echo "Checking if BOOT_CMD_PATCH has already been applied to $(UBOOT_HEADER)..."; \
-		if patch --dry-run --silent $(UBOOT_HEADER) < $(BOOT_CMD_PATCH) > /dev/null 2>&1; then \
-			patch $(UBOOT_HEADER) < $(BOOT_CMD_PATCH); \
-		else \
-			echo "BOOT_CMD_PATCH is already applied to $(UBOOT_HEADER). Skipping..."; \
-		fi \
-	else \
-		echo "BOOT_CMD_PATCH file not found. Skipping..."; \
-	fi
+.PHONY: u-boot-apply-bootcmd
+u-boot-apply-bootcmd:
+	cp $(BOOT_CMD) $(UBOOT_HEADER)
 
 .PHONY: u-boot-loader
 u-boot-loader: u-boot-proper
 	$(UBOOT_PATH)/tools/mkimage -n rk3588 -T rksd -d $(UBOOT_PATH)/tpl/u-boot-tpl.bin:$(UBOOT_PATH)/spl/u-boot-spl.bin $(UBOOT_PATH)/idbloader.img
 
 .PHONY: u-boot
-u-boot: u-boot-apply-patch $(TPL_BIN) $(UBOOT_PATH)/.config u-boot-loader
+u-boot: u-boot-apply-bootcmd $(TPL_BIN) $(UBOOT_PATH)/.config u-boot-loader
 	$(UBOOT_EXPORTS) $(MAKE) -C $(UBOOT_PATH) $(UBOOT_FLAGS) u-boot.itb
 
 .PHONY: u-boot-clean
@@ -169,21 +160,14 @@ LINUX_COMMON_FLAGS += ARCH=arm64 CFLAGS_KERNEL="-Wno-error"
 LINUX_COMMON_TARGETS += Image rockchip/rk3588-nanopi6-rev01.dtb \
 			$(if $(filter y,$(LINUX_MODULES)),modules)
 
-.PHONY: linux-apply-patch
-linux-apply-patch:
-	@if [ -f "$(BOARD_DTSI_PATCH)" ]; then \
-		echo "Checking if BOARD_DTSI_PATCH has already been applied to $(LINUX_DTSI)..."; \
-		if patch --dry-run --silent $(LINUX_DTSI) < $(BOARD_DTSI_PATCH) > /dev/null 2>&1; then \
-			patch $(LINUX_DTSI) < $(BOARD_DTSI_PATCH); \
-		else \
-			echo "BOARD_DTSI_PATCH is already applied to $(LINUX_DTSI). Skipping..."; \
-		fi \
-	else \
-		echo "BOARD_DTSI_PATCH file not found. Skipping..."; \
-	fi
+.PHONY: linux-apply-dtso
+linux-apply-dtso: linux-common
+	$(LINUX_PATH)/scripts/dtc/dtc -I dts -O dtb \
+		-o $(LINUX_PATH)/arch/arm64/boot/dts/rockchip/rk3588-nanopi6-optee.dtbo \
+		$(BOARD_DTSO)
 
 .PHONY: linux
-linux: linux-common linux-apply-patch
+linux: linux-common linux-apply-dtso
 ifeq ($(LINUX_MODULES),y)
 	$(MAKE) -C $(LINUX_PATH) ARCH=arm64 modules_install \
 		INSTALL_MOD_PATH=$(BINARIES_PATH)/modules
@@ -249,6 +233,7 @@ boot-img: u-boot buildroot $(LINUX_PATH)/arch/arm64/boot/Image.gz
 	e2mkdir $(ROOT_IMG):/boot
 	e2cp $(LINUX_PATH)/arch/arm64/boot/Image.gz $(ROOT_IMG):/boot
 	e2cp $(LINUX_PATH)/arch/arm64/boot/dts/rockchip/rk3588-nanopi6-rev01.dtb $(ROOT_IMG):/boot
+	e2cp $(LINUX_PATH)/arch/arm64/boot/dts/rockchip/rk3588-nanopi6-optee.dtbo $(ROOT_IMG):/boot
 ifeq ($(LINUX_MODULES),y)
 	find $(BINARIES_PATH)/modules -type f | while read f; do e2cp -a $$f $(ROOT_IMG):$$(echo $$f | sed s@$(BINARIES_PATH)/modules@@); done
 endif
